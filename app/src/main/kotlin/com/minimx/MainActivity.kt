@@ -60,6 +60,9 @@ import java.time.format.DateTimeFormatter
 // ponytail: one length for every app. Per-app pause durations if 5s stops working.
 private const val PAUSE_SECONDS = 5
 
+private const val FOCUS_PAGE = 0
+private const val HOME_PAGE = 1
+
 private val TIME = DateTimeFormatter.ofPattern("HH:mm")
 private val DATE = DateTimeFormatter.ofPattern("EEE d MMM")
 
@@ -107,7 +110,9 @@ private sealed interface Overlay {
     data class Menu(val app: App) : Overlay
     data class LimitEntry(val app: App) : Overlay
     data class Pause(val app: App, val minutesLeft: Int, val limitMin: Int) : Overlay
+    data class Blocked(val app: App) : Overlay
     data object Settings : Overlay
+    data object AllowList : Overlay
     data object Appearance : Overlay
     data object WidgetPicker : Overlay
     data object HiddenApps : Overlay
@@ -115,8 +120,12 @@ private sealed interface Overlay {
 
 @Composable
 private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
+    val ctx = LocalContext.current
+    val focus = remember { Focus(ctx) }
+    val tasks = remember { Tasks(ctx) }
     val scope = rememberCoroutineScope()
-    val pager = rememberPagerState(pageCount = { 2 })
+    // Home sits in the middle: down is focus, up is apps.
+    val pager = rememberPagerState(initialPage = HOME_PAGE, pageCount = { 3 })
     var query by remember { mutableStateOf("") }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
@@ -132,12 +141,21 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
         remaining = withContext(Dispatchers.Default) { apps.remainingToday() }
     }
 
+    // Ticks only while a session is live; otherwise it settles on 0 and stops recomposing.
+    var focusLeft by remember { mutableStateOf(0L) }
+    LaunchedEffect(reset, prefsRev) {
+        while (true) {
+            focusLeft = focus.remainingMs()
+            delay(1000)
+        }
+    }
+
     LaunchedEffect(reset) {
         now = LocalDateTime.now()
         query = ""
         overlay = null
         prefsRev++
-        pager.scrollToPage(0)
+        pager.scrollToPage(HOME_PAGE)
     }
 
     LaunchedEffect(Unit) {
@@ -148,6 +166,12 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
     }
 
     fun launch(app: App) {
+        // Focus outranks budgets: during a work session everything off the allowlist is
+        // simply not opening, so there is no point telling you how many minutes are left.
+        if (focus.blocks(app.pkg)) {
+            overlay = Overlay.Blocked(app)
+            return
+        }
         // Budgeted apps get the pause screen. `remaining` was refreshed on resume, and
         // nothing can have used the app since, so no usage query is needed at tap time.
         val left = remaining[app.pkg]
@@ -168,19 +192,29 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
             when (val o = overlay) {
                 null -> {
                     VerticalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
-                        if (page == 0) {
-                            Home(
+                        when (page) {
+                            FOCUS_PAGE -> FocusPage(
+                                focus = focus,
+                                tasks = tasks,
+                                remainingMs = focusLeft,
+                                prefsRev = prefsRev,
+                                onChanged = { prefsRev++ },
+                                onAllowList = { overlay = Overlay.AllowList },
+                            )
+
+                            HOME_PAGE -> Home(
                                 apps = apps,
                                 installed = installed,
                                 now = now,
                                 prefsRev = prefsRev,
                                 remaining = remaining,
+                                focusLeft = focusLeft,
                                 onLaunch = ::launch,
                                 onMenu = { overlay = Overlay.Menu(it) },
                                 onSettings = { overlay = Overlay.Settings },
                             )
-                        } else {
-                            Drawer(
+
+                            else -> Drawer(
                                 apps = apps,
                                 installed = installed,
                                 query = query,
@@ -192,17 +226,25 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
                             )
                         }
                     }
-                    // Drawer -> home. Home -> nothing; back on a launcher must be inert.
+                    // Any page -> home. On home, back is inert; a launcher has nowhere to go.
                     BackHandler(enabled = true) {
-                        if (pager.currentPage != 0) {
+                        if (pager.currentPage != HOME_PAGE) {
                             query = ""
-                            scope.launch { pager.animateScrollToPage(0) }
+                            scope.launch { pager.animateScrollToPage(HOME_PAGE) }
                         }
                     }
                 }
 
+                is Overlay.Blocked -> Blocked(
+                    app = o.app,
+                    remainingMs = focusLeft,
+                    onAllow = { focus.toggleAllowed(o.app.pkg); prefsRev++; overlay = null },
+                    onClose = { overlay = null },
+                )
+
                 is Overlay.Menu -> Menu(
                     apps = apps,
+                    focus = focus,
                     app = o.app,
                     onEditLimit = { overlay = Overlay.LimitEntry(o.app) },
                     onChanged = { prefsRev++ },
@@ -220,6 +262,13 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
                     minutesLeft = o.minutesLeft,
                     limitMin = o.limitMin,
                     onOpen = { overlay = null; apps.launch(o.app) },
+                    onClose = { overlay = null },
+                )
+
+                Overlay.AllowList -> AllowListScreen(
+                    focus = focus,
+                    installed = installed,
+                    onChanged = { prefsRev++ },
                     onClose = { overlay = null },
                 )
 
@@ -262,6 +311,7 @@ private fun Home(
     now: LocalDateTime,
     prefsRev: Int,
     remaining: Map<String, Int>,
+    focusLeft: Long,
     onLaunch: (App) -> Unit,
     onMenu: (App) -> Unit,
     onSettings: () -> Unit,
@@ -287,6 +337,12 @@ private fun Home(
     ) {
         BasicText(now.format(TIME), style = look.big)
         BasicText(now.format(DATE).lowercase(), style = look.dim)
+
+        // A live session is the one thing on home worth the accent colour.
+        if (focusLeft > 0) {
+            Spacer(Modifier.height(16.dp))
+            BasicText("focus  ${formatCountdown(focusLeft)}", style = look.accent)
+        }
 
         if (widgets.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))
@@ -362,32 +418,7 @@ private fun Drawer(
                 )
             }
         }
-        Search(query, onQuery)
-    }
-}
-
-@Composable
-private fun Search(query: String, onQuery: (String) -> Unit) {
-    val look = styles()
-    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-        BasicText("> ", style = look.text)
-        Box(Modifier.weight(1f)) {
-            if (query.isEmpty()) BasicText("search", style = look.dim)
-            // ponytail: tap to focus, no autofocus. A keyboard that pops on every
-            // swipe-up is worse than one tap.
-            BasicTextField(
-                value = query,
-                onValueChange = onQuery,
-                textStyle = look.text,
-                singleLine = true,
-                cursorBrush = SolidColor(look.palette.accent),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (query.isNotEmpty()) {
-            BasicText("  x", style = look.dim, modifier = Modifier.tap({ onQuery("") }))
-        }
+        SearchField(query, onQuery)
     }
 }
 
@@ -396,6 +427,7 @@ private fun Search(query: String, onQuery: (String) -> Unit) {
 @Composable
 private fun Menu(
     apps: Apps,
+    focus: Focus,
     app: App,
     onEditLimit: () -> Unit,
     onChanged: () -> Unit,
@@ -405,6 +437,7 @@ private fun Menu(
     var rev by remember { mutableStateOf(0) }
     val isPinned = remember(rev) { app.key in apps.pinned }
     val isHidden = remember(rev) { app.key in apps.hidden }
+    val isAllowed = remember(rev) { app.pkg in focus.allowed }
     val limit = remember(rev) { apps.limit(app.pkg) }
     // One binder call on a screen you reach by long-pressing — not worth going async for.
     val usedMs = remember(rev) { if (limit > 0) apps.usedTodayMs(app.pkg) else 0L }
@@ -423,8 +456,32 @@ private fun Menu(
             suffix = if (limit > 0) "${minutesLeft(limit, usedMs)}m left" else null,
             onClick = onEditLimit,
         )
+        Line(
+            text = "> allow in focus",
+            suffix = if (isAllowed) "yes" else "no",
+        ) { focus.toggleAllowed(app.pkg); rev++; onChanged() }
         Line("> app info") { apps.appInfo(app); onClose() }
         Line("> back", dim = true, onClick = onClose)
+    }
+}
+
+/**
+ * What a blocked app looks like during a work session. The way through is to allow the
+ * app — a deliberate edit to the allowlist — not a "just this once" button that would
+ * make the session meaningless.
+ */
+@Composable
+private fun Blocked(app: App, remainingMs: Long, onAllow: () -> Unit, onClose: () -> Unit) {
+    val look = styles()
+    BackHandler { onClose() }
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp)) {
+        Spacer(Modifier.weight(1f))
+        BasicText(app.label, style = look.text)
+        BasicText("blocked — ${formatCountdown(remainingMs)} of focus left", style = look.dim)
+        Spacer(Modifier.height(48.dp))
+        Line("> back", onClick = onClose)
+        Line("> allow this app in focus", dim = true, onClick = onAllow)
+        Spacer(Modifier.weight(1f))
     }
 }
 

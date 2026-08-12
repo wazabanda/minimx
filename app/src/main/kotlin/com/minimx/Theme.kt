@@ -3,18 +3,23 @@ package com.minimx
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.googlefonts.Font
@@ -161,6 +166,33 @@ fun Line(
         if (suffix != null) {
             Spacer(Modifier.weight(1f))
             BasicText(suffix, style = look.dim)
+        }
+    }
+}
+
+/**
+ * The bottom-of-screen filter field, at the thumb end. ponytail: tap to focus, never
+ * autofocus — a keyboard that pops open on every swipe is worse than one tap.
+ */
+@Composable
+fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String = "search") {
+    val look = styles()
+    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+        BasicText("> ", style = look.text)
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) BasicText(placeholder, style = look.dim)
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                textStyle = look.text,
+                singleLine = true,
+                cursorBrush = SolidColor(look.palette.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            BasicText("  x", style = look.dim, modifier = Modifier.tap({ onQuery("") }))
         }
     }
 }

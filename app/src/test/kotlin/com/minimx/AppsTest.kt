@@ -16,6 +16,17 @@ class AppsTest {
     }
 
     @Test
+    fun countdownRoundsUp() {
+        // A session started this instant must read as its full length, not one second short.
+        assertEquals("25:00", formatCountdown(25 * 60_000L))
+        assertEquals("25:00", formatCountdown(25 * 60_000L - 1))   // still the same second
+        assertEquals("24:59", formatCountdown(25 * 60_000L - 1000)) // one whole second gone
+        assertEquals("0:01", formatCountdown(1))
+        assertEquals("0:00", formatCountdown(0))
+        assertEquals("1:00:00", formatCountdown(60 * 60_000L))
+    }
+
+    @Test
     fun budgetFloorsAtZero() {
         assertEquals(0, minutesLeft(30, 30 * 60_000L))
         assertEquals(0, minutesLeft(30, 90 * 60_000L))     // way over, never negative

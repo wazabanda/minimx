@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -152,6 +153,61 @@ fun WidgetScreen(apps: Apps, onChanged: () -> Unit, onClose: () -> Unit) {
             }
         }
         Line("> back", dim = true, onClick = onClose)
+    }
+}
+
+// --- focus allowlist --------------------------------------------------------
+
+/**
+ * Pick what stays reachable during a work session. Allowed apps float to the top so the
+ * current selection is visible without hunting for it; everything else is alphabetical
+ * behind the filter.
+ */
+@Composable
+fun AllowListScreen(
+    focus: Focus,
+    installed: List<App>,
+    onChanged: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val look = styles()
+    var query by remember { mutableStateOf("") }
+    var rev by remember { mutableStateOf(0) }
+    val allowed = remember(rev) { focus.allowed }
+    val visible = remember(installed, allowed, query) {
+        installed
+            // One row per app, not per launcher activity — the allowlist is package-level.
+            .distinctBy { it.pkg }
+            .filter { it.label.contains(query, ignoreCase = true) }
+            .sortedWith(compareByDescending<App> { it.pkg in allowed }.thenBy { it.label.lowercase() })
+    }
+
+    BackHandler { onClose() }
+
+    Column(Modifier.fillMaxSize().imePadding().padding(vertical = 32.dp)) {
+        Column(Modifier.padding(horizontal = 24.dp)) {
+            BasicText("allowed in focus", style = look.text)
+            BasicText(
+                if (allowed.isEmpty()) "nothing allowed — a session blocks everything"
+                else "${allowed.size} apps stay open during focus",
+                style = look.dim,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+
+        LazyColumn(Modifier.weight(1f)) {
+            items(visible, key = { it.pkg }) { app ->
+                val on = app.pkg in allowed
+                Line(
+                    text = if (on) "> ${app.label}" else "  ${app.label}",
+                    dim = !on,
+                    suffix = if (on) "allowed" else null,
+                ) { focus.toggleAllowed(app.pkg); rev++; onChanged() }
+            }
+        }
+
+        Line("> back", dim = true, onClick = onClose)
+        SearchField(query, { query = it }, placeholder = "filter apps")
     }
 }
 
