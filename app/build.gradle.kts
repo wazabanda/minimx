@@ -49,5 +49,9 @@ dependencies {
     // ponytail: foundation only. No material3 — this launcher has no ripples,
     // no elevation and no theme system, so the whole Material layer is dead weight.
     implementation("androidx.compose.foundation:foundation")
+    // Google Fonts pulled at runtime through the Play Services provider — no font bytes
+    // in the APK. Needs res/values/font_certs.xml to trust the provider.
+    implementation("androidx.compose.ui:ui-text-google-fonts")
+    implementation("androidx.core:core-ktx:1.13.1")
     testImplementation("junit:junit:4.13.2")
 }

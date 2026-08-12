@@ -71,6 +71,29 @@ class Apps(private val ctx: Context) {
     fun setLimit(pkg: String, minutes: Int) =
         prefs.edit().apply { if (minutes > 0) putInt("$LIMIT$pkg", minutes) else remove("$LIMIT$pkg") }.apply()
 
+    // --- appearance ---------------------------------------------------------
+
+    var paletteId: String
+        get() = prefs.getString(PALETTE, "mono-dark") ?: "mono-dark"
+        set(v) = prefs.edit().putString(PALETTE, v).apply()
+
+    var fontId: String
+        get() = prefs.getString(FONT, "mono") ?: "mono"
+        set(v) = prefs.edit().putString(FONT, v).apply()
+
+    var scaleId: String
+        get() = prefs.getString(SCALE, "m") ?: "m"
+        set(v) = prefs.edit().putString(SCALE, v).apply()
+
+    /** Enabled widget ids, in display order. */
+    var widgetIds: List<String>
+        get() = prefs.getString(WIDGETS_KEY, "battery").orEmpty().split("\n").filter { it.isNotEmpty() }
+        set(v) = prefs.edit().putString(WIDGETS_KEY, v.joinToString("\n")).apply()
+
+    fun toggleWidget(id: String) {
+        widgetIds = if (id in widgetIds) widgetIds - id else widgetIds + id
+    }
+
     /** Every budget set, keyed by package. */
     fun limits(): Map<String, Int> = prefs.all
         .filterKeys { it.startsWith(LIMIT) }
@@ -112,6 +135,13 @@ class Apps(private val ctx: Context) {
         }
     }
 
+    /** Total foreground time across all apps today, or null without usage access. */
+    fun screenTimeTodayMs(): Long? {
+        if (!hasUsageAccess()) return null
+        return usage.queryAndAggregateUsageStats(startOfToday(), System.currentTimeMillis())
+            .values.sumOf { it.totalTimeInForeground }
+    }
+
     private fun startOfToday(): Long =
         LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
@@ -125,6 +155,10 @@ class Apps(private val ctx: Context) {
         const val PINNED = "pinned"
         const val HIDDEN = "hidden"
         const val LIMIT = "limit."
+        const val PALETTE = "palette"
+        const val FONT = "font"
+        const val SCALE = "scale"
+        const val WIDGETS_KEY = "widgets"
     }
 }
 

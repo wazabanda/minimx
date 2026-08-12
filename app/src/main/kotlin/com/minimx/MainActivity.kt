@@ -11,8 +11,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +32,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -41,19 +40,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -62,16 +56,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-
-// --- terminal palette -------------------------------------------------------
-
-private val BG = Color.Black
-private val FG = Color.White
-private val DIM = Color(0xFF777777)
-
-private val Mono = TextStyle(fontFamily = FontFamily.Monospace, color = FG, fontSize = 18.sp)
-private val MonoDim = Mono.copy(color = DIM)
-private val MonoBig = Mono.copy(fontSize = 52.sp)
 
 // ponytail: one length for every app. Per-app pause durations if 5s stops working.
 private const val PAUSE_SECONDS = 5
@@ -123,6 +107,10 @@ private sealed interface Overlay {
     data class Menu(val app: App) : Overlay
     data class LimitEntry(val app: App) : Overlay
     data class Pause(val app: App, val minutesLeft: Int, val limitMin: Int) : Overlay
+    data object Settings : Overlay
+    data object Appearance : Overlay
+    data object WidgetPicker : Overlay
+    data object HiddenApps : Overlay
 }
 
 @Composable
@@ -133,8 +121,10 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
     var overlay by remember { mutableStateOf<Overlay?>(null) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
 
-    // Pin/hide/limit edits are written straight to prefs; this counter re-reads them.
+    // Pin/hide/limit/appearance edits are written straight to prefs; this re-reads them.
     var prefsRev by remember { mutableStateOf(0) }
+
+    val look = remember(prefsRev) { stylesFor(apps.paletteId, apps.fontId, apps.scaleId) }
 
     // pkg -> minutes left today. Off the main thread: it is a binder call to usage stats.
     var remaining by remember { mutableStateOf(emptyMap<String, Int>()) }
@@ -168,68 +158,97 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(BG)
-            .windowInsetsPadding(WindowInsets.systemBars),
-    ) {
-        when (val o = overlay) {
-            null -> {
-                VerticalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
-                    if (page == 0) {
-                        Home(
-                            apps = apps,
-                            installed = installed,
-                            now = now,
-                            prefsRev = prefsRev,
-                            remaining = remaining,
-                            onLaunch = ::launch,
-                            onMenu = { overlay = Overlay.Menu(it) },
-                        )
-                    } else {
-                        Drawer(
-                            apps = apps,
-                            installed = installed,
-                            query = query,
-                            prefsRev = prefsRev,
-                            remaining = remaining,
-                            onQuery = { query = it },
-                            onLaunch = ::launch,
-                            onMenu = { overlay = Overlay.Menu(it) },
-                        )
+    CompositionLocalProvider(LocalStyles provides look) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(look.bg)
+                .windowInsetsPadding(WindowInsets.systemBars),
+        ) {
+            when (val o = overlay) {
+                null -> {
+                    VerticalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                        if (page == 0) {
+                            Home(
+                                apps = apps,
+                                installed = installed,
+                                now = now,
+                                prefsRev = prefsRev,
+                                remaining = remaining,
+                                onLaunch = ::launch,
+                                onMenu = { overlay = Overlay.Menu(it) },
+                                onSettings = { overlay = Overlay.Settings },
+                            )
+                        } else {
+                            Drawer(
+                                apps = apps,
+                                installed = installed,
+                                query = query,
+                                prefsRev = prefsRev,
+                                remaining = remaining,
+                                onQuery = { query = it },
+                                onLaunch = ::launch,
+                                onMenu = { overlay = Overlay.Menu(it) },
+                            )
+                        }
+                    }
+                    // Drawer -> home. Home -> nothing; back on a launcher must be inert.
+                    BackHandler(enabled = true) {
+                        if (pager.currentPage != 0) {
+                            query = ""
+                            scope.launch { pager.animateScrollToPage(0) }
+                        }
                     }
                 }
-                // Drawer -> home. Home -> nothing; back on a launcher must be inert.
-                BackHandler(enabled = true) {
-                    if (pager.currentPage != 0) {
-                        query = ""
-                        scope.launch { pager.animateScrollToPage(0) }
-                    }
-                }
+
+                is Overlay.Menu -> Menu(
+                    apps = apps,
+                    app = o.app,
+                    onEditLimit = { overlay = Overlay.LimitEntry(o.app) },
+                    onChanged = { prefsRev++ },
+                    onClose = { overlay = null },
+                )
+
+                is Overlay.LimitEntry -> LimitEntry(
+                    apps = apps,
+                    app = o.app,
+                    onDone = { prefsRev++; overlay = Overlay.Menu(o.app) },
+                )
+
+                is Overlay.Pause -> Pause(
+                    app = o.app,
+                    minutesLeft = o.minutesLeft,
+                    limitMin = o.limitMin,
+                    onOpen = { overlay = null; apps.launch(o.app) },
+                    onClose = { overlay = null },
+                )
+
+                Overlay.Settings -> SettingsScreen(
+                    onAppearance = { overlay = Overlay.Appearance },
+                    onWidgets = { overlay = Overlay.WidgetPicker },
+                    onHidden = { overlay = Overlay.HiddenApps },
+                    onClose = { overlay = null },
+                )
+
+                Overlay.Appearance -> AppearanceScreen(
+                    apps = apps,
+                    onChanged = { prefsRev++ },
+                    onClose = { overlay = Overlay.Settings },
+                )
+
+                Overlay.WidgetPicker -> WidgetScreen(
+                    apps = apps,
+                    onChanged = { prefsRev++ },
+                    onClose = { overlay = Overlay.Settings },
+                )
+
+                Overlay.HiddenApps -> HiddenAppsScreen(
+                    apps = apps,
+                    installed = installed,
+                    onChanged = { prefsRev++ },
+                    onClose = { overlay = Overlay.Settings },
+                )
             }
-
-            is Overlay.Menu -> Menu(
-                apps = apps,
-                app = o.app,
-                onEditLimit = { overlay = Overlay.LimitEntry(o.app) },
-                onChanged = { prefsRev++ },
-                onClose = { overlay = null },
-            )
-
-            is Overlay.LimitEntry -> LimitEntry(
-                apps = apps,
-                app = o.app,
-                onDone = { prefsRev++; overlay = Overlay.Menu(o.app) },
-            )
-
-            is Overlay.Pause -> Pause(
-                app = o.app,
-                minutesLeft = o.minutesLeft,
-                limitMin = o.limitMin,
-                onOpen = { overlay = null; apps.launch(o.app) },
-                onClose = { overlay = null },
-            )
         }
     }
 }
@@ -245,8 +264,10 @@ private fun Home(
     remaining: Map<String, Int>,
     onLaunch: (App) -> Unit,
     onMenu: (App) -> Unit,
+    onSettings: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val look = styles()
     val pinned = remember(installed, prefsRev) {
         val byKey = installed.associateBy { it.key }
         apps.pinned.mapNotNull { byKey[it] }
@@ -254,19 +275,32 @@ private fun Home(
     val isDefault = remember(prefsRev) { apps.isDefaultLauncher() }
     // Without usage access the budgets are set but never counted, and nothing would say so.
     val limitsBlind = remember(prefsRev) { apps.limits().isNotEmpty() && !apps.hasUsageAccess() }
+    val widgets = remember(prefsRev) { apps.widgetIds.mapNotNull(::widgetOf) }
 
     Column(
         Modifier
             .fillMaxSize()
+            // Long-press on blank space is the settings gesture; app rows consume their
+            // own long-press first, so this only fires on the empty parts.
+            .tap(onClick = {}, onLong = onSettings)
             .padding(horizontal = 24.dp, vertical = 32.dp),
     ) {
-        BasicText(now.format(TIME), style = MonoBig)
-        BasicText(now.format(DATE).lowercase(), style = MonoDim)
+        BasicText(now.format(TIME), style = look.big)
+        BasicText(now.format(DATE).lowercase(), style = look.dim)
+
+        if (widgets.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            widgets.forEach { widget ->
+                // A widget with nothing to say renders nothing at all — no empty row.
+                widget.line()?.let { BasicText(it, style = look.dim, modifier = Modifier.padding(vertical = 4.dp)) }
+            }
+        }
+
         Spacer(Modifier.height(48.dp))
 
         if (pinned.isEmpty()) {
-            BasicText("swipe up for apps", style = MonoDim, modifier = Modifier.padding(vertical = 10.dp))
-            BasicText("long-press one to pin it here", style = MonoDim)
+            BasicText("swipe up for apps", style = look.dim, modifier = Modifier.padding(vertical = 10.dp))
+            BasicText("long-press one to pin it here", style = look.dim)
         }
         pinned.forEach { app ->
             Line(
@@ -328,39 +362,36 @@ private fun Drawer(
                 )
             }
         }
-        Search(query, onQuery, onSubmit = { visible.firstOrNull()?.let(onLaunch) })
+        Search(query, onQuery)
     }
 }
 
 @Composable
-private fun Search(query: String, onQuery: (String) -> Unit, onSubmit: () -> Unit) {
+private fun Search(query: String, onQuery: (String) -> Unit) {
+    val look = styles()
     Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-        BasicText("> ", style = Mono)
+        BasicText("> ", style = look.text)
         Box(Modifier.weight(1f)) {
-            if (query.isEmpty()) BasicText("search", style = MonoDim)
+            if (query.isEmpty()) BasicText("search", style = look.dim)
             // ponytail: tap to focus, no autofocus. A keyboard that pops on every
             // swipe-up is worse than one tap.
             BasicTextField(
                 value = query,
                 onValueChange = onQuery,
-                textStyle = Mono,
+                textStyle = look.text,
                 singleLine = true,
-                cursorBrush = SolidColor(FG),
+                cursorBrush = SolidColor(look.palette.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         if (query.isNotEmpty()) {
-            BasicText(
-                "  x",
-                style = MonoDim,
-                modifier = Modifier.tap({ onQuery("") }),
-            )
+            BasicText("  x", style = look.dim, modifier = Modifier.tap({ onQuery("") }))
         }
     }
 }
 
-// --- overlays ---------------------------------------------------------------
+// --- per-app overlays -------------------------------------------------------
 
 @Composable
 private fun Menu(
@@ -370,6 +401,7 @@ private fun Menu(
     onChanged: () -> Unit,
     onClose: () -> Unit,
 ) {
+    val look = styles()
     var rev by remember { mutableStateOf(0) }
     val isPinned = remember(rev) { app.key in apps.pinned }
     val isHidden = remember(rev) { app.key in apps.hidden }
@@ -380,8 +412,8 @@ private fun Menu(
     BackHandler { onClose() }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp)) {
-        BasicText(app.label, style = Mono)
-        BasicText(app.pkg, style = MonoDim)
+        BasicText(app.label, style = look.text)
+        BasicText(app.pkg, style = look.dim)
         Spacer(Modifier.height(32.dp))
 
         Line(if (isPinned) "> unpin" else "> pin") { apps.togglePin(app.key); rev++; onChanged() }
@@ -399,6 +431,7 @@ private fun Menu(
 @Composable
 private fun LimitEntry(apps: Apps, app: App, onDone: () -> Unit) {
     val ctx = LocalContext.current
+    val look = styles()
     var text by remember { mutableStateOf(apps.limit(app.pkg).takeIf { it > 0 }?.toString() ?: "") }
     val focus = remember { FocusRequester() }
     val hasAccess = remember { apps.hasUsageAccess() }
@@ -407,18 +440,18 @@ private fun LimitEntry(apps: Apps, app: App, onDone: () -> Unit) {
     LaunchedEffect(Unit) { focus.requestFocus() }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp).imePadding()) {
-        BasicText(app.label, style = Mono)
-        BasicText("daily limit, minutes", style = MonoDim)
+        BasicText(app.label, style = look.text)
+        BasicText("daily limit, minutes", style = look.dim)
         Spacer(Modifier.height(32.dp))
 
         Row {
-            BasicText("> ", style = Mono)
+            BasicText("> ", style = look.text)
             BasicTextField(
                 value = text,
                 onValueChange = { v -> text = v.filter { it.isDigit() }.take(4) },
-                textStyle = Mono,
+                textStyle = look.text,
                 singleLine = true,
-                cursorBrush = SolidColor(FG),
+                cursorBrush = SolidColor(look.palette.accent),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Done,
@@ -434,7 +467,7 @@ private fun LimitEntry(apps: Apps, app: App, onDone: () -> Unit) {
 
         if (!hasAccess) {
             Spacer(Modifier.height(32.dp))
-            BasicText("limits need usage access", style = MonoDim)
+            BasicText("limits need usage access", style = look.dim)
             Line("> grant", dim = true) {
                 ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             }
@@ -449,6 +482,7 @@ private fun LimitEntry(apps: Apps, app: App, onDone: () -> Unit) {
  */
 @Composable
 private fun Pause(app: App, minutesLeft: Int, limitMin: Int, onOpen: () -> Unit, onClose: () -> Unit) {
+    val look = styles()
     var seconds by remember(app.key) { mutableStateOf(PAUSE_SECONDS) }
     LaunchedEffect(app.key) {
         while (seconds > 0) {
@@ -461,16 +495,16 @@ private fun Pause(app: App, minutesLeft: Int, limitMin: Int, onOpen: () -> Unit,
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp)) {
         Spacer(Modifier.weight(1f))
-        BasicText(app.label, style = Mono)
+        BasicText(app.label, style = look.text)
         BasicText(
             if (minutesLeft > 0) "${minutesLeft}m left of ${limitMin}m today"
             else "${limitMin}m/day spent — over budget",
-            style = MonoDim,
+            style = look.dim,
         )
         Spacer(Modifier.height(48.dp))
 
         if (seconds > 0) {
-            BasicText("$seconds", style = MonoBig)
+            BasicText("$seconds", style = look.big)
         } else {
             // ponytail: soft gate. A hard block needs an AccessibilityService watching the
             // foreground app — real battery cost, and only helps if this is the only way in.
@@ -480,39 +514,4 @@ private fun Pause(app: App, minutesLeft: Int, limitMin: Int, onOpen: () -> Unit,
         Line("> back", dim = true, onClick = onClose)
         Spacer(Modifier.weight(1f))
     }
-}
-
-// --- primitives -------------------------------------------------------------
-
-@Composable
-private fun Line(
-    text: String,
-    dim: Boolean = false,
-    suffix: String? = null,
-    onLong: (() -> Unit)? = null,
-    onClick: () -> Unit,
-) = Row(
-    modifier = Modifier
-        .fillMaxWidth()
-        .tap(onClick, onLong)
-        .padding(horizontal = 24.dp, vertical = 12.dp),
-    verticalAlignment = Alignment.CenterVertically,
-) {
-    BasicText(text, style = if (dim) MonoDim else Mono)
-    if (suffix != null) {
-        Spacer(Modifier.weight(1f))
-        BasicText(suffix, style = MonoDim)
-    }
-}
-
-/** Clickable with no ripple — Material's touch feedback has no place here. */
-@Composable
-private fun Modifier.tap(onClick: () -> Unit, onLong: (() -> Unit)? = null): Modifier {
-    val source = remember { MutableInteractionSource() }
-    return combinedClickable(
-        interactionSource = source,
-        indication = null,
-        onClick = onClick,
-        onLongClick = onLong,
-    )
 }
