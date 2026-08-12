@@ -50,9 +50,23 @@ class Focus(private val ctx: Context) {
 
     fun start(phase: Phase) {
         val minutes = if (phase == Phase.WORK) workMinutes else breakMinutes
-        val end = System.currentTimeMillis() + minutes * 60_000L
-        prefs.edit().putLong(ENDS_AT, end).putString(PHASE, phase.name).apply()
+        val total = minutes * 60_000L
+        val end = System.currentTimeMillis() + total
+        // Total is stored, not recomputed from workMinutes: changing the length setting
+        // mid-session must not warp the ring of a session already running.
+        prefs.edit()
+            .putLong(ENDS_AT, end)
+            .putLong(TOTAL, total)
+            .putString(PHASE, phase.name)
+            .apply()
         scheduleAlarm(end)
+    }
+
+    /** 1f at the start, 0f at the end. */
+    fun progress(): Float {
+        val total = prefs.getLong(TOTAL, 0L)
+        if (total <= 0L) return 0f
+        return (remainingMs().toFloat() / total).coerceIn(0f, 1f)
     }
 
     fun stop() {
@@ -104,6 +118,7 @@ class Focus(private val ctx: Context) {
 
     private companion object {
         const val ENDS_AT = "focus_ends_at"
+        const val TOTAL = "focus_total"
         const val PHASE = "focus_phase"
         const val WORK = "focus_work"
         const val BREAK = "focus_break"

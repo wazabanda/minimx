@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -127,6 +129,7 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
     // Home sits in the middle: down is focus, up is apps.
     val pager = rememberPagerState(initialPage = HOME_PAGE, pageCount = { 3 })
     var query by remember { mutableStateOf("") }
+    var homeQuery by remember { mutableStateOf("") }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
 
@@ -153,6 +156,7 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
     LaunchedEffect(reset) {
         now = LocalDateTime.now()
         query = ""
+        homeQuery = ""
         overlay = null
         prefsRev++
         pager.scrollToPage(HOME_PAGE)
@@ -209,6 +213,8 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
                                 prefsRev = prefsRev,
                                 remaining = remaining,
                                 focusLeft = focusLeft,
+                                query = homeQuery,
+                                onQuery = { homeQuery = it },
                                 onLaunch = ::launch,
                                 onMenu = { overlay = Overlay.Menu(it) },
                                 onSettings = { overlay = Overlay.Settings },
@@ -226,11 +232,15 @@ private fun Launcher(apps: Apps, installed: List<App>, reset: Int) {
                             )
                         }
                     }
-                    // Any page -> home. On home, back is inert; a launcher has nowhere to go.
+                    // Any page -> home, clearing a quick-launch query first. On an empty
+                    // home, back is inert; a launcher has nowhere to go.
                     BackHandler(enabled = true) {
-                        if (pager.currentPage != HOME_PAGE) {
-                            query = ""
-                            scope.launch { pager.animateScrollToPage(HOME_PAGE) }
+                        when {
+                            pager.currentPage != HOME_PAGE -> {
+                                query = ""
+                                scope.launch { pager.animateScrollToPage(HOME_PAGE) }
+                            }
+                            homeQuery.isNotEmpty() -> homeQuery = ""
                         }
                     }
                 }
@@ -312,6 +322,8 @@ private fun Home(
     prefsRev: Int,
     remaining: Map<String, Int>,
     focusLeft: Long,
+    query: String,
+    onQuery: (String) -> Unit,
     onLaunch: (App) -> Unit,
     onMenu: (App) -> Unit,
     onSettings: () -> Unit,
@@ -321,6 +333,18 @@ private fun Home(
     val pinned = remember(installed, prefsRev) {
         val byKey = installed.associateBy { it.key }
         apps.pinned.mapNotNull { byKey[it] }
+    }
+    // Quick launch: while typing, hits stand in for the pinned list rather than pushing
+    // it down the screen. Capped, because home is not the drawer.
+    val hits = remember(installed, query, prefsRev) {
+        if (query.isBlank()) {
+            emptyList()
+        } else {
+            val hidden = apps.hidden
+            installed
+                .filter { it.key !in hidden && it.label.contains(query, ignoreCase = true) }
+                .take(6)
+        }
     }
     val isDefault = remember(prefsRev) { apps.isDefaultLauncher() }
     // Without usage access the budgets are set but never counted, and nothing would say so.
@@ -333,41 +357,72 @@ private fun Home(
             // Long-press on blank space is the settings gesture; app rows consume their
             // own long-press first, so this only fires on the empty parts.
             .tap(onClick = {}, onLong = onSettings)
-            .padding(horizontal = 24.dp, vertical = 32.dp),
+            .imePadding()
+            .padding(vertical = Space.section),
     ) {
-        BasicText(now.format(TIME), style = look.big)
-        BasicText(now.format(DATE).lowercase(), style = look.dim)
+        // The middle scrolls so the field below stays put. With the keyboard up there is
+        // not enough height for clock + widgets + hits, and a weighted spacer would
+        // collapse and push the field off the bottom of the screen.
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+        Column(Modifier.padding(horizontal = Space.edge)) {
+            BasicText(now.format(TIME), style = look.big)
+            BasicText(now.format(DATE).lowercase(), style = look.dim)
 
-        // A live session is the one thing on home worth the accent colour.
-        if (focusLeft > 0) {
-            Spacer(Modifier.height(16.dp))
-            BasicText("focus  ${formatCountdown(focusLeft)}", style = look.accent)
-        }
+            // A live session is the one thing on home worth the accent colour.
+            if (focusLeft > 0) {
+                Spacer(Modifier.height(Space.tight))
+                BasicText("focus  ${formatCountdown(focusLeft)}", style = look.accent)
+            }
 
-        if (widgets.isNotEmpty()) {
-            Spacer(Modifier.height(24.dp))
-            widgets.forEach { widget ->
-                // A widget with nothing to say renders nothing at all — no empty row.
-                widget.line()?.let { BasicText(it, style = look.dim, modifier = Modifier.padding(vertical = 4.dp)) }
+            if (widgets.isNotEmpty()) {
+                Spacer(Modifier.height(Space.section))
+                widgets.forEach { widget ->
+                    // A widget with nothing to say renders nothing at all — no empty row.
+                    Box(Modifier.padding(vertical = 6.dp)) { widget.render() }
+                }
             }
         }
 
-        Spacer(Modifier.height(48.dp))
+        Spacer(Modifier.height(Space.section))
+        Rule(Modifier.padding(horizontal = Space.edge))
+        Spacer(Modifier.height(Space.tight))
 
-        if (pinned.isEmpty()) {
-            BasicText("swipe up for apps", style = look.dim, modifier = Modifier.padding(vertical = 10.dp))
-            BasicText("long-press one to pin it here", style = look.dim)
+        val shown = if (query.isNotBlank()) hits else pinned
+
+        if (query.isNotBlank() && hits.isEmpty()) {
+            Column(Modifier.padding(horizontal = Space.edge, vertical = Space.row)) {
+                BasicText("no match", style = look.dim)
+            }
         }
-        pinned.forEach { app ->
+        if (query.isBlank() && pinned.isEmpty()) {
+            Column(Modifier.padding(horizontal = Space.edge, vertical = Space.row)) {
+                BasicText("swipe up for apps", style = look.dim)
+                Spacer(Modifier.height(Space.tight))
+                BasicText("long-press one to pin it here", style = look.dim)
+            }
+        }
+        shown.forEach { app ->
+            val left = remaining[app.pkg]
             Line(
                 app.label,
-                suffix = remaining[app.pkg]?.let { "${it}m left" },
+                suffix = left?.let { "${it}m left" },
+                meter = left?.let { it.toFloat() / apps.limit(app.pkg).coerceAtLeast(1) },
                 onClick = { onLaunch(app) },
                 onLong = { onMenu(app) },
             )
         }
+        }
 
-        Spacer(Modifier.weight(1f))
+        SearchField(
+            query = query,
+            onQuery = onQuery,
+            placeholder = "quick launch",
+            onSubmit = { hits.firstOrNull()?.let(onLaunch) },
+        )
 
         if (limitsBlind) {
             Line("> limits need usage access", dim = true) {
@@ -410,9 +465,11 @@ private fun Drawer(
     ) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             items(visible, key = { it.key }) { app ->
+                val left = remaining[app.pkg]
                 Line(
                     app.label,
-                    suffix = remaining[app.pkg]?.let { "${it}m left" },
+                    suffix = left?.let { "${it}m left" },
+                    meter = left?.let { it.toFloat() / apps.limit(app.pkg).coerceAtLeast(1) },
                     onClick = { onLaunch(app) },
                     onLong = { onMenu(app) },
                 )
@@ -454,6 +511,7 @@ private fun Menu(
         Line(
             text = if (limit > 0) "> limit  ${limit}m/day" else "> limit  none",
             suffix = if (limit > 0) "${minutesLeft(limit, usedMs)}m left" else null,
+            meter = if (limit > 0) minutesLeft(limit, usedMs).toFloat() / limit else null,
             onClick = onEditLimit,
         )
         Line(

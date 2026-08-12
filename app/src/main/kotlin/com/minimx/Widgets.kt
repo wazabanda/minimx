@@ -9,13 +9,24 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.os.BatteryManager
 import android.provider.CalendarContract
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -46,6 +57,16 @@ interface Widget {
 
     @Composable
     fun line(): String?
+
+    /**
+     * How the row is drawn. The default renders `line()` as quiet text, which is all any
+     * widget needed until the screen-time mascot wanted a sprite next to its number.
+     * Override only when text genuinely cannot say it.
+     */
+    @Composable
+    fun render() {
+        line()?.let { BasicText(it, style = styles().dim) }
+    }
 }
 
 val WIDGETS: List<Widget> = listOf(BatteryWidget, AlarmWidget, EventWidget, ScreenTimeWidget)
@@ -163,22 +184,61 @@ object ScreenTimeWidget : Widget {
     override val label = "screen time today"
 
     @Composable
-    override fun line(): String? {
+    private fun minutesToday(): Long? {
         val ctx = LocalContext.current
         val apps = remember { Apps(ctx) }
-        var text by remember { mutableStateOf<String?>(null) }
+        var minutes by remember { mutableStateOf<Long?>(null) }
         LaunchedEffect(Unit) {
             while (true) {
-                text = withContext(Dispatchers.IO) {
-                    apps.screenTimeTodayMs()?.let { ms ->
-                        val minutes = ms / 60_000
-                        if (minutes >= 60) "screen %dh %02dm".format(minutes / 60, minutes % 60)
-                        else "screen ${minutes}m"
-                    }
-                }
+                minutes = withContext(Dispatchers.IO) { apps.screenTimeTodayMs()?.div(60_000) }
                 delay(5 * 60_000)
             }
         }
-        return text
+        return minutes
+    }
+
+    @Composable
+    override fun line(): String? = minutesToday()?.let { minutes ->
+        if (minutes >= 60) "%dh %02dm".format(minutes / 60, minutes % 60) else "${minutes}m"
+    }
+
+    @Composable
+    override fun render() {
+        val look = styles()
+        val minutes = minutesToday() ?: return
+        val stage = mascotStage(minutes)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                painter = painterResource(MASCOT_FRAMES[stage]),
+                contentDescription = null,
+                // Single-colour silhouette tinted by the theme. It turns to the accent
+                // colour at the last stage, which is the only moment worth alarm.
+                colorFilter = ColorFilter.tint(
+                    if (stage == MASCOT_FRAMES.lastIndex) look.palette.accent else look.palette.dim,
+                ),
+                modifier = Modifier.size(26.dp),
+            )
+            Spacer(Modifier.width(Space.tight))
+            BasicText(line().orEmpty(), style = look.dim)
+        }
     }
 }
+
+private val MASCOT_FRAMES = listOf(
+    R.drawable.mascot_0,
+    R.drawable.mascot_1,
+    R.drawable.mascot_2,
+    R.drawable.mascot_3,
+    R.drawable.mascot_4,
+    R.drawable.mascot_5,
+)
+
+/**
+ * Which frame the plant is on, by minutes of screen time. It is a guilt gauge, not a
+ * metric: a number tells you nothing at a glance, a plant dying tells you immediately.
+ * Change these numbers to move the goalposts; the last stage is terminal.
+ */
+private val MASCOT_STAGES = listOf(60L, 120L, 180L, 240L, 300L)
+
+fun mascotStage(minutes: Long): Int =
+    MASCOT_STAGES.indexOfFirst { minutes < it }.takeIf { it >= 0 } ?: MASCOT_STAGES.size

@@ -1,5 +1,6 @@
 package com.minimx
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -7,9 +8,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -24,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.googlefonts.Font
 import androidx.compose.ui.text.googlefonts.GoogleFont
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -140,6 +145,16 @@ val LocalStyles = staticCompositionLocalOf { stylesFor("mono-dark", "mono", "m")
 @Composable
 fun styles(): Styles = LocalStyles.current
 
+// --- spacing ----------------------------------------------------------------
+
+/** One place to breathe. Screens read from these instead of sprinkling numbers. */
+object Space {
+    val edge = 28.dp        // screen side margin
+    val row = 16.dp         // vertical padding inside a tappable row
+    val section = 40.dp     // between blocks that mean different things
+    val tight = 12.dp       // inside a block
+}
+
 // --- shared primitives ------------------------------------------------------
 
 /**
@@ -151,6 +166,8 @@ fun Line(
     text: String,
     dim: Boolean = false,
     suffix: String? = null,
+    /** 0f..1f — draws a small bar before the suffix. Null draws nothing. */
+    meter: Float? = null,
     onLong: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
@@ -159,14 +176,43 @@ fun Line(
         modifier = Modifier
             .fillMaxWidth()
             .tap(onClick, onLong)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(horizontal = Space.edge, vertical = Space.row),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(text, style = if (dim) look.dim else look.text)
-        if (suffix != null) {
+        if (suffix != null || meter != null) {
             Spacer(Modifier.weight(1f))
-            BasicText(suffix, style = look.dim)
+            if (meter != null) {
+                Meter(meter)
+                Spacer(Modifier.width(Space.tight))
+            }
+            if (suffix != null) BasicText(suffix, style = look.dim)
         }
+    }
+}
+
+/**
+ * How much is left, as a bar. Deliberately small and quiet — it sits beside a number
+ * that already says the same thing, and exists so a glance is enough.
+ */
+@Composable
+fun Meter(fraction: Float, width: Dp = 40.dp) {
+    val look = styles()
+    Canvas(Modifier.width(width).height(3.dp)) {
+        drawRect(color = look.palette.dim, alpha = 0.3f, size = size)
+        drawRect(
+            color = if (fraction <= 0.15f) look.palette.accent else look.palette.fg,
+            size = size.copy(width = size.width * fraction.coerceIn(0f, 1f)),
+        )
+    }
+}
+
+/** A hairline between sections. Barely there on purpose. */
+@Composable
+fun Rule(modifier: Modifier = Modifier) {
+    val look = styles()
+    Canvas(modifier.fillMaxWidth().height(1.dp)) {
+        drawRect(color = look.palette.dim, alpha = 0.25f, size = size)
     }
 }
 
@@ -175,9 +221,15 @@ fun Line(
  * autofocus — a keyboard that pops open on every swipe is worse than one tap.
  */
 @Composable
-fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String = "search") {
+fun SearchField(
+    query: String,
+    onQuery: (String) -> Unit,
+    placeholder: String = "search",
+    /** Enter/Go on the keyboard — launches the top hit without lifting a thumb. */
+    onSubmit: (() -> Unit)? = null,
+) {
     val look = styles()
-    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.edge, vertical = Space.row)) {
         BasicText("> ", style = look.text)
         Box(Modifier.weight(1f)) {
             if (query.isEmpty()) BasicText(placeholder, style = look.dim)
@@ -188,6 +240,7 @@ fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String = 
                 singleLine = true,
                 cursorBrush = SolidColor(look.palette.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { onSubmit?.invoke() }),
                 modifier = Modifier.fillMaxWidth(),
             )
         }

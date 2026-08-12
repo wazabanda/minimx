@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -28,10 +31,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
@@ -57,11 +66,11 @@ fun FocusPage(
         Modifier
             .fillMaxSize()
             .imePadding()
-            .padding(horizontal = 24.dp, vertical = 32.dp),
+            .padding(horizontal = Space.edge, vertical = Space.section),
     ) {
         Timer(focus, remainingMs, prefsRev, onChanged, onAllowList)
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(Space.section))
         BasicText("tasks", style = look.dim)
 
         LazyColumn(Modifier.weight(1f)) {
@@ -133,13 +142,19 @@ private fun Timer(
 
     when {
         remainingMs > 0 -> {
-            BasicText(formatCountdown(remainingMs), style = look.big)
-            BasicText(
-                if (focus.phase == Phase.WORK) "focus — everything but $allowed apps is blocked"
-                else "break",
-                style = look.dim,
-            )
-            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Ring(focus.progress())
+                Spacer(Modifier.width(20.dp))
+                Column {
+                    BasicText(formatCountdown(remainingMs), style = look.big)
+                    BasicText(
+                        if (focus.phase == Phase.WORK) "focus — everything but $allowed apps is blocked"
+                        else "break",
+                        style = look.dim,
+                    )
+                }
+            }
+            Spacer(Modifier.height(Space.tight))
             GiveUp(
                 quitting = quitting,
                 onAsk = { quitting = true },
@@ -157,7 +172,7 @@ private fun Timer(
                 if (focus.phase == Phase.WORK) "take ${rest}m" else "break over",
                 style = look.dim,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Space.tight))
             if (focus.phase == Phase.WORK) {
                 Line("> start break") { start(Phase.BREAK) }
             }
@@ -168,7 +183,7 @@ private fun Timer(
         else -> {
             BasicText("${work}:00", style = look.big)
             BasicText("ready", style = look.dim)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Space.tight))
             Line("> start focus") { start(Phase.WORK) }
             // Tap to cycle. A picker screen for two numbers would be more UI than setting.
             Line("> work", suffix = "${work}m", dim = true) {
@@ -181,6 +196,37 @@ private fun Timer(
             }
             Line("> allowed in focus", suffix = "$allowed apps", dim = true, onClick = onAllowList)
         }
+    }
+}
+
+/** The session, drained clockwise. Empty ring means time is up. */
+@Composable
+private fun Ring(progress: Float, size: Dp = 56.dp, stroke: Dp = 3.dp) {
+    val look = styles()
+    Canvas(Modifier.size(size)) {
+        val width = stroke.toPx()
+        val inset = width / 2
+        val arc = Size(this.size.width - width, this.size.height - width)
+        drawArc(
+            color = look.palette.dim,
+            alpha = 0.3f,
+            startAngle = 0f,
+            sweepAngle = 360f,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = arc,
+            style = Stroke(width = width),
+        )
+        drawArc(
+            color = look.palette.accent,
+            // Twelve o'clock, clockwise — the direction every clock face has trained you for.
+            startAngle = -90f,
+            sweepAngle = 360f * progress,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = arc,
+            style = Stroke(width = width, cap = StrokeCap.Round),
+        )
     }
 }
 

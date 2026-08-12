@@ -16,6 +16,18 @@ class AppsTest {
     }
 
     @Test
+    fun mascotDecaysWithScreenTime() {
+        assertEquals(0, mascotStage(0))
+        assertEquals(0, mascotStage(59))
+        assertEquals(1, mascotStage(60))      // each boundary belongs to the worse stage
+        assertEquals(2, mascotStage(120))
+        assertEquals(3, mascotStage(180))
+        assertEquals(4, mascotStage(240))
+        assertEquals(5, mascotStage(300))
+        assertEquals(5, mascotStage(10_000))  // no frame past the last one
+    }
+
+    @Test
     fun countdownRoundsUp() {
         // A session started this instant must read as its full length, not one second short.
         assertEquals("25:00", formatCountdown(25 * 60_000L))

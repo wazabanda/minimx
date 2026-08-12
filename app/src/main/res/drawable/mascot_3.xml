@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Stage 3: one drooping leaf left. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp" android:height="16dp"
+    android:viewportWidth="16" android:viewportHeight="16">
+    <path android:fillColor="#FFFFFF" android:pathData="M4,12h8v4h-8z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M7,6h2v6h-2z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M4,10h3v2h-3z" />
+</vector>
